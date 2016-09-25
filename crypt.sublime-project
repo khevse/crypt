@@ -1,0 +1,21 @@
+{
+    "folders":
+    [
+        {
+            "path": "."
+        }
+    ],
+
+    "env": {
+        "GOPATH": "${project_path:Default}/src:$GOPATH",
+        "GOBIN": "${project_path:Default}/bin",
+        "PATH": "$${project_path:Default}/bin:$PATH"
+    },
+
+    "build_systems": [
+        {
+            "name": "Test run",
+            "shell_cmd": "go test"
+        },
+     ]
+}
