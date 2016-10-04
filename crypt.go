@@ -2,121 +2,64 @@ package crypt
 
 import (
 	"bytes"
+	"crypto/aes"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
-	"fmt"
-	"io/ioutil"
 )
 
-// @param is_encrypting: true = encrypt; false = decrypt
-func RSACrypt(is_encrypting bool, key interface{}, rsa_length int, data []byte, label []byte) (*bytes.Buffer, error) {
+func GenerateRandomBytes() ([]byte, error) {
 
-	var max_block_len int
-	switch rsa_length {
-	case 4096:
-		if is_encrypting {
-			max_block_len = 446
-		} else {
-			max_block_len = 512
-		}
-
-	case 2048:
-		if is_encrypting {
-			max_block_len = 190
-		} else {
-			max_block_len = 256
-		}
-	default:
-		return nil, errors.New("Wrong RSA length")
+	retval := make([]byte, 32)
+	if _, err := rand.Read(retval); err != nil {
+		return nil, errors.New("Failed generating random bytes: " + err.Error())
 	}
 
-	var buf bytes.Buffer
-	var start_pos, end_pos int
-
-	sha := sha256.New()
-
-	for end_pos < len(data) {
-		start_pos = end_pos
-		end_pos = start_pos + max_block_len
-		if end_pos > len(data) {
-			end_pos = len(data)
-		}
-
-		block := data[start_pos:end_pos]
-
-		var err error
-		var resut []byte
-
-		if is_encrypting {
-			resut, err = rsa.EncryptOAEP(sha, rand.Reader, key.(*rsa.PublicKey), block, label)
-		} else {
-			resut, err = rsa.DecryptOAEP(sha, rand.Reader, key.(*rsa.PrivateKey), block, label)
-		}
-
-		if err != nil {
-			return nil, err
-		}
-
-		buf.Write(resut)
-	}
-
-	return &buf, nil
+	return retval, nil
 }
 
-func RSAGenerateLabel() ([]byte, error) {
+func Encrypt(key *rsa.PublicKey, data []byte, label []byte) (*bytes.Buffer, error) {
 
-	label := make([]byte, 32)
-	if _, err := rand.Read(label); err != nil {
-		return nil, errors.New("Failed generating label: " + err.Error())
-	}
-
-	return label, nil
-}
-
-func ReadPem(path_to_file string, key interface{}) error {
-
-	pem_data, err := ioutil.ReadFile(path_to_file)
+	aes_key, err := GenerateRandomBytes()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	block, _ := pem.Decode(pem_data)
-	if block == nil {
-		return errors.New("Decode error: " + path_to_file)
+	encrypted_data, iv, err := AESEncrypt(aes_key, data)
+	if err != nil {
+		return nil, err
 	}
 
-	switch key.(type) {
-	case **rsa.PrivateKey:
-		{
-			switch block.Type {
-			case "RSA PRIVATE KEY":
-				rsa_key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-				if err != nil {
-					return err
-				}
-				*(key.(**rsa.PrivateKey)) = rsa_key
-			default:
-				return fmt.Errorf("Unsupported key type %q", block.Type)
-			}
-		}
-	case **rsa.PublicKey:
-		{
-			switch block.Type {
-			case "PUBLIC KEY":
-				rsa_key, err := x509.ParsePKIXPublicKey(block.Bytes)
-				if err != nil {
-					return err
-				}
-				*(key.(**rsa.PublicKey)) = rsa_key.(*rsa.PublicKey)
-			default:
-				return fmt.Errorf("Unsupported key type %q", block.Type)
-			}
-		}
+	aes_secret := bytes.NewBuffer(iv)
+	aes_secret.Write(aes_key)
+
+	block, err := RSAEncrypt(key, aes_secret.Bytes(), label)
+
+	encrypt := bytes.NewBuffer(block.Bytes())
+	encrypt.Write(encrypted_data)
+
+	return encrypt, err
+}
+
+func Decrypt(key *rsa.PrivateKey, data []byte, label []byte) (*bytes.Buffer, error) {
+
+	block_len, err := RSABlockLen(false, key)
+	if err != nil {
+		return nil, err
 	}
 
-	return nil
+	aes_secret, err := RSADecrypt(key, data[:block_len], label)
+	if err != nil {
+		return nil, err
+	}
+
+	iv := aes_secret.Bytes()[:aes.BlockSize]
+	aes_key := aes_secret.Bytes()[aes.BlockSize:]
+
+	decrypted_data, err := AESDecrypt(aes_key, iv, data[block_len:])
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewBuffer(decrypted_data), nil
 }
